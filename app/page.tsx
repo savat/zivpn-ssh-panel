@@ -1,5 +1,5 @@
-import Panel from '@/components/Panel';
+import Dashboard from '@/components/Dashboard';
 
 export default function Home() {
-  return <Panel />;
+  return <Dashboard />;
 }
