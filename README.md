@@ -2,6 +2,36 @@
 
 เว็บ panel (Next.js) จัดการ VPS ZIVPN หลายเครื่องจากหน้าเดียว — เว็บ SSH เข้าไปรันคำสั่ง `m` ที่ติดตั้งโดย `install.sh` + `menu.sh` (v1.1.0 ขึ้นไป)
 
+## ติดตั้งที่ VPS (install.sh)
+
+รับ root + มี systemd + apt (Debian/Ubuntu) วางไฟล์ `install.sh` และ `menu.sh` ไว้โฟลเดอร์เดียวกับ แล้วคัดลอกรันตามนี้:
+
+#### 1. ดาวน์โหลดไฟล์ติดตั้ง
+```bash
+cd /root
+wget https://github.com/savat/zivpn-ssh-panel/raw/main/install.sh
+wget https://github.com/savat/zivpn-ssh-panel/raw/main/menu.sh
+chmod +x install.sh menu.sh
+```
+
+#### 2. รันติดตั้ง (ถามที่อยู่เซิร์ฟเวอร์/ช่วงพอร์ต หรือเว้นว่าง = ค่าเริ่มต้น)
+```bash
+sudo sh install.sh
+```
+
+#### 3. แบบไม่ถามคำถาม (ตั้งค่าล่วงหน้า)
+```bash
+sudo ZP_YES=1 ZP_HOST=vpn.example.com ZP_RANGE=6000:19999 sh install.sh
+```
+เปิดพอร์ตที่ใช้: `5667/udp` (และช่วง hopping `6000:19999`) ใน UFW ให้อัตโนมัติ
+
+#### 4. หลังติดตั้ง
+```bash
+sudo m          # เปิดเมนูจัดการผู้ใช้
+sudo m backup   # สำรองข้อมูล
+sudo m expire   # ไล่ผู้ใช้หมดอายุ
+```
+
 ## ติดตั้ง
 1. **VPS ทุกเครื่อง**: อัปเดต `menu.sh` เป็น v1.1.0 แล้วรัน `sh install.sh` ใหม่ (เก็บผู้ใช้เดิมไว้) — ต้องมีคำสั่ง `m api status|list`
 2. **Supabase**: สร้างโปรเจกต์ → SQL Editor → รัน `supabase/schema.sql`
