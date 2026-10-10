@@ -161,7 +161,7 @@ export default function Users() {
           </section>
 
           <section className="card rise">
-            <div className="row" style={{ justifyContent: 'space-between' }}>
+            <div className="row actions">
               <div className="row">
                 <button disabled={!!busy} onClick={() => act('restart', {}, 'รีสตาร์ท')}>รีสตาร์ท</button>
                 <button disabled={!!busy} onClick={() => act('health', {}, 'ตรวจสุขภาพ')}>ตรวจสุขภาพ</button>
@@ -192,7 +192,7 @@ export default function Users() {
                     <b>{u.name}</b>
                     {stateBadge(u)}
                   </div>
-                  <div className="row muted" style={{ fontSize: 13 }}>
+                  <div className="row muted meta" style={{ fontSize: 13 }}>
                     <span className="mono" onClick={() => setShow((s) => ({ ...s, [u.name]: !s[u.name] }))} style={{ cursor: 'pointer' }}>
                       รหัส: {show[u.name] ? u.password : '••••••••'} {show[u.name] ? '' : '(แตะเพื่อดู)'}
                     </span>
