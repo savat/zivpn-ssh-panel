@@ -16,6 +16,7 @@ export default function Users() {
   const [modal, setModal] = useState<Modal>(null);
   const [q, setQ] = useState('');
   const [show, setShow] = useState<Record<string, boolean>>({});
+  const [menu, setMenu] = useState<string | null>(null);
   const [filter, setFilter] = useState<'all' | 'active' | 'soon' | 'bad'>('all');
 
   const loadOverview = useCallback(async (id: string) => {
@@ -37,6 +38,7 @@ export default function Users() {
     setOut('');
     setQ('');
     setShow({});
+    setMenu(null);
     setFilter('all');
     try { history.replaceState(null, '', `/users?s=${id}`); localStorage.setItem('zp_sel', id); } catch { /* ignore */ }
     loadOverview(id);
@@ -156,8 +158,7 @@ export default function Users() {
           <section className="totals">
             <div className="tot rise"><small>บริการ</small><b style={{ color: ov.status.service === '1' ? 'var(--green)' : 'var(--red)' }}>{ov.status.service === '1' ? '● RUNNING' : '● STOPPED'}</b></div>
             <div className="tot rise" style={{ '--d': '60ms' } as React.CSSProperties}><small>ผู้ใช้ (ใช้งาน/ทั้งหมด)</small><b>{ov.status.active}/{ov.status.total}</b></div>
-            <div className="tot rise" style={{ '--d': '120ms' } as React.CSSProperties}><small>พอร์ต</small><b>{ov.status.port}{ov.status.range ? ` +${ov.status.range}` : ''}</b></div>
-            <div className="tot rise" style={{ '--d': '180ms' } as React.CSSProperties}><small>เซิร์ฟเวอร์</small><b className="mono sm">{ov.status.host}</b></div>
+            <div className="tot rise" style={{ '--d': '120ms' } as React.CSSProperties}><small>เซิร์ฟเวอร์</small><b className="mono sm">{ov.status.host}</b></div>
           </section>
 
           <section className="card rise">
@@ -190,7 +191,10 @@ export default function Users() {
                 <div key={u.name} className="user rise" style={{ '--d': `${Math.min(i, 12) * 35}ms` } as React.CSSProperties}>
                   <div className="head">
                     <b>{u.name}</b>
-                    {stateBadge(u)}
+                    <div className="head-right">
+                      {stateBadge(u)}
+                      <button className="more" aria-label="เมนู" onClick={() => setMenu(menu === u.name ? null : u.name)}>⋯</button>
+                    </div>
                   </div>
                   <div className="row muted meta" style={{ fontSize: 13 }}>
                     <span className="mono" onClick={() => setShow((s) => ({ ...s, [u.name]: !s[u.name] }))} style={{ cursor: 'pointer' }}>
@@ -198,15 +202,20 @@ export default function Users() {
                     </span>
                     <span>· หมดอายุ {fmtDate(u.expires)}</span>
                   </div>
-                  <div className="btns">
-                    <button disabled={!!busy} onClick={() => setModal({ k: 'user', kind: 'renew', user: u.name })}>ต่ออายุ</button>
-                    <button disabled={!!busy} onClick={() => setModal({ k: 'user', kind: 'passwd', user: u.name })}>เปลี่ยนรหัส</button>
-                    {u.state === 'off'
-                      ? <button disabled={!!busy} onClick={() => act('on', { user: u.name })}>เปิด</button>
-                      : u.state === 'active' && <button disabled={!!busy} onClick={() => act('off', { user: u.name })}>ปิด</button>}
-                    <button onClick={() => { copy(info(u)); setOut(`คัดลอกข้อมูลเชื่อมต่อของ ${u.name} แล้ว\n\n${info(u)}`); }}>คัดลอกข้อมูล</button>
-                    <button className="danger" disabled={!!busy} onClick={() => confirm(`ลบผู้ใช้ "${u.name}" ?`) && act('del', { user: u.name })}>ลบ</button>
-                  </div>
+                  {menu === u.name && (
+                    <>
+                      <div className="backdrop" onClick={() => setMenu(null)} />
+                      <div className="usermenu">
+                        <button onClick={() => { setMenu(null); setModal({ k: 'user', kind: 'renew', user: u.name }); }}>ต่ออายุ</button>
+                        <button onClick={() => { setMenu(null); setModal({ k: 'user', kind: 'passwd', user: u.name }); }}>เปลี่ยนรหัส</button>
+                        {u.state === 'off'
+                          ? <button onClick={() => { setMenu(null); act('on', { user: u.name }); }}>เปิด</button>
+                          : u.state === 'active' && <button onClick={() => { setMenu(null); act('off', { user: u.name }); }}>ปิด</button>}
+                        <button onClick={() => { copy(info(u)); setOut(`คัดลอกข้อมูลเชื่อมต่อของ ${u.name} แล้ว\n\n${info(u)}`); setMenu(null); }}>คัดลอกข้อมูล</button>
+                        <button className="danger" onClick={() => { setMenu(null); confirm(`ลบผู้ใช้ "${u.name}" ?`) && act('del', { user: u.name }); }}>ลบ</button>
+                      </div>
+                    </>
+                  )}
                 </div>
               ))}
             </div>

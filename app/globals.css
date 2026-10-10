@@ -146,11 +146,15 @@ h2 { margin: 0; font-size: 16px; }
 
 /* ---- users */
 .users { display: grid; gap: 10px; }
-.user { background: var(--panel2); border: 1px solid var(--line); border-radius: 14px; padding: 10px 12px; display: grid; gap: 8px; transition: border-color .2s, transform .2s; }
+.user { position: relative; background: var(--panel2); border: 1px solid var(--line); border-radius: 14px; padding: 10px 12px; display: grid; gap: 8px; transition: border-color .2s, transform .2s; }
 .user:hover { border-color: rgba(56, 208, 240, .35); }
 .user .head { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
-.user .btns { display: flex; gap: 6px; flex-wrap: wrap; }
-.user .btns button { padding: 5px 10px; font-size: 13px; }
+.user .head-right { display: flex; align-items: center; gap: 8px; }
+.user .more { padding: 2px 8px; font-size: 18px; line-height: 1; border-radius: 10px; }
+.backdrop { position: fixed; inset: 0; z-index: 24; }
+.usermenu { position: absolute; top: 42px; right: 10px; z-index: 25; min-width: 180px; width: max-content; max-width: calc(100vw - 40px); background: #0e1626; border: 1px solid var(--line); border-radius: 14px; padding: 6px; display: grid; gap: 2px; box-shadow: 0 12px 34px #0008; animation: pop .18s both; }
+.usermenu button { display: flex; width: 100%; justify-content: flex-start; padding: 9px 12px; }
+.usermenu button.danger { color: var(--red); }
 pre.out { margin: 10px 0 0; padding: 10px; background: rgba(0, 0, 0, .45); border: 1px solid var(--line); border-radius: 10px; max-height: 260px; overflow: auto; white-space: pre-wrap; word-break: break-word; font-size: 12.5px; animation: rise .3s both; }
 
 /* ---- modal / login */
@@ -169,11 +173,9 @@ pre.out { margin: 10px 0 0; padding: 10px; background: rgba(0, 0, 0, .45); borde
   .tot b { font-size: 16px; }
   .tot small { font-size: 11px; }
   .tot .mono { display: block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .user .btns { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
-  .user .btns button { width: 100%; min-height: 40px; }
-  .user .btns .danger { grid-column: 1 / -1; }
   .user .head { flex-wrap: wrap; }
   .user .head b { overflow-wrap: anywhere; }
+  .usermenu { position: fixed; top: auto; right: 12px; left: 12px; bottom: calc(70px + env(safe-area-inset-bottom)); width: auto; max-width: none; }
   .row.muted { font-size: 12px; }
 }
 
