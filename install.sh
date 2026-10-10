@@ -3,9 +3,9 @@
 #
 #   sh install.sh
 #
-# Non-interactive:  ZP_YES=1 ZP_HOST=vpn.example.com ZP_RANGE=6000:9999 sh install.sh
+# Non-interactive:  ZP_YES=1 ZP_HOST=vpn.example.com ZP_RANGE=6000:19999 sh install.sh
 #   ZP_HOST   address shown to clients        (default: detected public IP)
-#   ZP_RANGE  UDP port-hopping range -> 5667  (default: 6000:9999, "off" = disable)
+#   ZP_RANGE  UDP port-hopping range -> 5667  (default: 6000:19999, "off" = disable)
 #   ZP_YES=1  never ask questions
 #   ZP_MENU   path to menu.sh      (default: menu.sh next to install.sh)
 #   ZP_MENU_URL  download menu.sh from here if no local file
@@ -264,7 +264,7 @@ LEGACY=0
 
 # ---- 2. questions
 step 2 5 "ตั้งค่า"
-if [ -f "$ETC/manager.conf" ]; then . "$ETC/manager.conf"; DEF_HOST=${HOST:-}; DEF_RANGE=${RANGE:-off}; else DEF_HOST=""; DEF_RANGE="6000:9999"; fi
+if [ -f "$ETC/manager.conf" ]; then . "$ETC/manager.conf"; DEF_HOST=${HOST:-}; DEF_RANGE=${RANGE:-off}; else DEF_HOST=""; DEF_RANGE="6000:19999"; fi
 DEF_HOST="${ZP_HOST:-$DEF_HOST}"
 [ -n "${ZP_RANGE:-}" ] && DEF_RANGE=$ZP_RANGE
 
@@ -272,7 +272,7 @@ ask "ที่อยู่เซิร์ฟเวอร์ที่ลูกค
 ask "ช่วงพอร์ต UDP hopping (off = ปิด)" "$DEF_RANGE"; RANGE=$ANS
 case $RANGE in off|OFF|Off|-|none) RANGE="" ;; esac
 [ -z "$HOST" ] || valid_host "$HOST" || die "ที่อยู่เซิร์ฟเวอร์ไม่ถูกต้อง: $HOST"
-[ -z "$RANGE" ] || valid_range "$RANGE" || die "ช่วงพอร์ตไม่ถูกต้อง (ตัวอย่าง 6000:9999): $RANGE"
+[ -z "$RANGE" ] || valid_range "$RANGE" || die "ช่วงพอร์ตไม่ถูกต้อง (ตัวอย่าง 6000:19999): $RANGE"
 ok "port ${PORT}/udp${RANGE:+  +  hopping $RANGE}"
 
 # ---- 3. packages

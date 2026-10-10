@@ -1,6 +1,6 @@
 #!/bin/sh
 # m - ZIVPN manager (pure POSIX sh, no python / no web panel)
-VERSION="1.2.0"
+VERSION="1.1.0"
 set -u
 LC_COLLATE=C; export LC_COLLATE
 umask 077
@@ -11,9 +11,6 @@ BIN="${ZP_BIN:-/usr/local/bin/zivpn}"
 UNITS="${ZP_UNITS:-/etc/systemd/system}"
 BACKUPS="${ZP_BACKUPS:-/var/backups/zivpn}"
 SELF="${ZP_SELF:-/usr/local/bin/m}"
-SHARE="${ZP_SHARE:-/usr/local/share/zivpn-panel}"   # hysteria.sh + install_server.sh อยู่ที่นี่
-RAW="${ZP_RAW:-https://github.com/savat/zivpn-ssh-panel/raw/main}"
-HY_BIN="${ZP_HY_BIN:-/usr/local/bin/hysteria}"
 DRY="${ZP_DRY:-0}"
 DB="$ETC/users.db"
 CONF="$ETC/manager.conf"
@@ -501,59 +498,7 @@ do_uninstall() {
   fi
   rm -f "$SELF"
   ok "ถอนการติดตั้งเรียบร้อย"
-  if hy_installed; then
-    info "Hysteria ยังอยู่ (ไม่ได้ลบ) - จัดการต่อด้วย: bash $SHARE/hysteria.sh"
-  fi
   exit 0
-}
-
-# ------------------------------------------------------------------ hysteria (ตัวเสริม - แยกจาก ZIVPN)
-# Hysteria ใช้ service (hysteria-server) / โฟลเดอร์ (/etc/hysteria) / iptables chain (HYSTERIA_DNAT) ของตัวเอง
-# และ hysteria.sh ตรวจพอร์ตไม่ให้ชนกับ ZIVPN จึงไม่กระทบ ZIVPN ที่ติดตั้งไว้
-hy_installed() { [ -x "$HY_BIN" ] && [ -f /etc/hysteria/config.json ]; }
-
-hy_label() {
-  if hy_installed; then
-    if sysq hysteria-server.service; then printf '%s● RUNNING%s' "$GRN" "$RST"
-    else printf '%s● STOPPED%s' "$RED" "$RST"; fi
-  else
-    printf '%sยังไม่ติดตั้ง%s' "$DIM" "$RST"
-  fi
-}
-
-hy_fetch_one() { # $1 = ชื่อไฟล์ -> $SHARE/$1
-  command -v curl >/dev/null 2>&1 || return 1
-  _hd="$SHARE/$1"; _ht="$_hd.part.$$"
-  curl -fsSL --retry 3 --connect-timeout 15 -o "$_ht" "$RAW/$1" || { rm -f "$_ht"; return 1; }
-  case $(head -n 1 "$_ht") in '#!'*) ;; *) rm -f "$_ht"; return 1 ;; esac
-  chmod 755 "$_ht" && mv -f "$_ht" "$_hd"
-}
-
-hy_ensure() { # ไฟล์ติดตั้งครบไหม - ถ้าขาดจะโหลดให้
-  mkdir -p "$SHARE" && chmod 755 "$SHARE" || return 1
-  for _hf in hysteria.sh install_server.sh; do
-    [ -s "$SHARE/$_hf" ] && continue
-    info "กำลังดาวน์โหลด $_hf …"
-    hy_fetch_one "$_hf" || { bad "ดาวน์โหลด $_hf ไม่สำเร็จ ($RAW/$_hf)"; return 1; }
-  done
-  return 0
-}
-
-do_hysteria() {
-  sect "Hysteria"
-  command -v bash >/dev/null 2>&1 || { bad "ต้องมี bash (apt-get install -y bash)"; return 1; }
-  hy_ensure || return 1
-  info "ZIVPN (udp/$PORT${RANGE:+ + $RANGE}) จะไม่ถูกแตะต้อง - Hysteria แยกบริการ/ไฟล์/กฎ iptables และไม่ใช้พอร์ตซ้ำกับ ZIVPN"
-  # umask 077 ของ m ไม่ควรส่งต่อไปให้ hysteria (ไฟล์ config/ใบรับรองต้องอ่านได้ตามปกติ)
-  ( umask 022; ZP_ETC="$ETC" bash "$SHARE/hysteria.sh" )
-  _hrc=$?
-  # เช็กหลังกลับมา: ZIVPN ต้องยังปกติ - ถ้ากฎ port hopping หายให้ใส่คืน
-  if [ -n "$RANGE" ] && ! nat_present; then
-    warn "กฎ port hopping ของ ZIVPN หายไป - กำลังใส่คืน"
-    nat_up && ok "คืนกฎ port hopping ($RANGE → $PORT) แล้ว"
-  fi
-  if svc_active; then ok "ZIVPN ยังทำงานปกติ"; else warn "ZIVPN ไม่ทำงาน - ลอง: m restart"; fi
-  return "$_hrc"
 }
 
 # ------------------------------------------------------------------ menu
@@ -581,8 +526,6 @@ draw_menu() {
   printf '  %s11%s  สำรองข้อมูล\n'          "$CYN" "$RST"
   printf '  %s12%s  กู้คืนข้อมูล\n'         "$CYN" "$RST"
   printf '  %s13%s  ถอนการติดตั้ง\n'        "$CYN" "$RST"
-  printf '\n  %s── เสริม ──────────────────────────────%s\n' "$DIM" "$RST"
-  printf '  %s14%s  ติดตั้ง / จัดการ Hysteria   %s\n' "$CYN" "$RST" "$(hy_label)"
   printf '   %s0%s  ออก\n\n'                "$CYN" "$RST"
 }
 
@@ -607,7 +550,6 @@ menu() {
       11) do_backup ;;
       12) do_restore ;;
       13) do_uninstall ;;
-      14) do_hysteria ;;
       0|q|Q) exit 0 ;;
       *) bad "ไม่รู้จักเมนู: $CH" ;;
     esac
@@ -631,7 +573,6 @@ usage() {
     status | health | restart    ระบบ
     backup | restore FILE        สำรอง/กู้คืน
     uninstall                    ถอนการติดตั้ง
-    hysteria                     ติดตั้ง/จัดการ Hysteria (ไม่กระทบ ZIVPN)
 EOF
 }
 
@@ -680,7 +621,6 @@ main() {
     backup)      do_backup ;;
     restore)     do_restore "${1:-}" ;;
     uninstall)   do_uninstall ;;
-    hysteria|hy) do_hysteria ;;
     api)         do_api "${1:-}" ;;
     # internal (used by installer / systemd)
     render)      locked render; [ $? -le 1 ] ;;
