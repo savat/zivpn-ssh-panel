@@ -222,6 +222,11 @@ inst_port(){
         fi
     done
 
+    if ! [[ $port =~ ^[0-9]+$ ]] || (( port < 1 || port > 65535 )); then
+        red "พอร์ตหลักต้องเป็นตัวเลขตัวเดียว 1-65535 (เช่น 36712) - ช่วง 10000-65000 ให้ใส่ในขั้นตอนข้ามพอร์ตถัดไป"
+        inst_port
+        return
+    fi
     if zivpn_conflict $port; then
         red "พอร์ต $port ชนกับ $ZC - กรุณาเลือกพอร์ตอื่น"
         inst_port
@@ -261,6 +266,12 @@ inst_jump(){
     else
         red "จะใช้โหมดพอร์ตเดียวต่อไป"
     fi
+}
+
+inst_obfs(){
+    read -p "ตั้งรหัส obfs [Enter = jaideevpn]: " obfs
+    [[ -z $obfs ]] && obfs="jaideevpn"
+    yellow "รหัส obfs ที่ใช้บนโหนด Hysteria คือ: $obfs"
 }
 
 inst_pwd(){
@@ -306,6 +317,7 @@ inst_hy(){
     inst_pro
     inst_port
     inst_pwd
+    inst_obfs
     inst_resolv
 
     # สร้างไฟล์ config ของ Hysteria
@@ -316,7 +328,7 @@ inst_hy(){
     "resolve_preference": "$resolv",
     "cert": "$cert_path",
     "key": "$key_path",
-    "alpn": "h3",
+    "obfs": "$obfs",
     "auth": {
         "mode": "password",
         "config": {
@@ -328,10 +340,13 @@ EOF
 
     # หาขอบเขตพอร์ตสุดท้ายที่ลูกค้าใช้
     if [[ -n $firstport ]]; then
-        last_port="$port,$firstport-$endport"
+        last_port="$firstport-$endport"
     else
         last_port=$port
     fi
+
+    # ถ้ายังไม่มี IP (กรณีใช้ใบรับรอง Bing จะไม่ได้เรียก realip มาก่อน) ให้หาตอนนี้
+    [[ -z $ip ]] && realip
 
     # ครอบ IP ของ IPv6 ด้วยวงเล็บเหลี่ยม
     if [[ -n $(echo $ip | grep ":") ]]; then
@@ -355,22 +370,30 @@ EOF
         fi
     fi
 
+    client_proto=""
+    [[ $protocol != "udp" ]] && client_proto="  \"protocol\": \"$protocol\",
+"
+    clash_ports=""
+    url_mport=""
+    if [[ -n $firstport ]]; then
+        clash_ports="    ports: $firstport-$endport
+"
+        url_mport="&mport=$firstport-$endport"
+    fi
+
     # สร้างไฟล์ config ของ V2rayN และ Clash Meta
     mkdir /root/hy >/dev/null 2>&1
     cat <<EOF > /root/hy/hy-client.json
 {
   "server": "$hy_ym:$last_port",
-  "server_name": "$domain",
-  "protocol": "$protocol",
-  "alpn": "h3",
-  "auth_str": "$auth_pwd",
-  "obfs": "",
-  "up_mbps": 20,
-  "down_mbps": 100,
+${client_proto}  "auth_str": "$auth_pwd",
+  "obfs": "$obfs",
+  "up_mbps": 10,
+  "down_mbps": 20,
   "retry": 3,
-  "retry_interval": 3,
+  "retry_interval": 1,
   "socks5": {
-    "listen": "127.0.0.1:5080"
+    "listen": "127.0.0.1:1080"
   },
   "http": {
     "listen": "127.0.0.1:8989"
@@ -378,10 +401,7 @@ EOF
   "insecure": true,
   "ca": "",
   "recv_window_conn": 196608,
-  "recv_window": 491520,
-  "fast_open": true,
-  "lazy_start": true,
-  "hop_interval": 60
+  "recv_window": 491520
 }
 EOF
 
@@ -405,12 +425,11 @@ proxies:
     type: hysteria
     server: $hy_ym
     port: $port
-    auth_str: $auth_pwd
-    alpn:
-      - h3
+${clash_ports}    auth_str: $auth_pwd
+    obfs: $obfs
     protocol: $protocol
-    up: 20
-    down: 100
+    up: 10
+    down: 20
     sni: $domain
     skip-cert-verify: true
 proxy-groups:
@@ -423,7 +442,7 @@ rules:
   - GEOIP,CN,DIRECT
   - MATCH,Proxy
 EOF
-    url="hysteria://$hy_ym:$port?protocol=$protocol&auth=$auth_pwd&peer=$domain&insecure=true&upmbps=20&downmbps=100&alpn=h3#Misaka-Hysteria"
+    url="hysteria://$hy_ym:$port?protocol=$protocol&auth=$auth_pwd&peer=$domain$url_mport&obfs=xplus&obfsParam=$obfs&insecure=true&upmbps=10&downmbps=20#Misaka-Hysteria"
     echo $url > /root/hy/url.txt
 
     systemctl daemon-reload
@@ -511,10 +530,10 @@ change_cert(){
 change_pro(){
     old_pro=$(cat /etc/hysteria/config.json | grep protocol | awk -F " " '{print $2}' | sed "s/\"//g" | sed "s/,//g")
     inst_pro
-    sed -i "s/$old_pro/$protocol" /etc/hysteria/config.json
-    sed -i "s/$old_pro/$protocol" /root/hy/hy-client.json
-    sed -i "s/$old_pro/$protocol" /root/hy/clash-meta.yaml
-    sed -i "s/$old_pro/$protocol" /root/hy/url.txt
+    sed -i "s/$old_pro/$protocol/" /etc/hysteria/config.json
+    sed -i "s/$old_pro/$protocol/" /root/hy/hy-client.json
+    sed -i "s/$old_pro/$protocol/" /root/hy/clash-meta.yaml
+    sed -i "s/$old_pro/$protocol/" /root/hy/url.txt
     stophy && starthy
     green "แก้ไข config สำเร็จ กรุณานำเข้าไฟล์ config โหนดใหม่อีกครั้ง"
 }
@@ -527,15 +546,21 @@ change_port(){
     netfilter-persistent save >/dev/null 2>&1
 
     if [[ -n $firstport ]]; then
-        last_port="$port,$firstport-$endport"
+        last_port="$firstport-$endport"
     else
         last_port=$port
     fi
 
     sed -i "s/$old_port/$port/" /etc/hysteria/config.json
-    sed -i "s/$old_port/$last_port/" /root/hy/hy-client.json
-    sed -i "s/$old_port/$last_port/" /root/hy/clash-meta.yaml
-    sed -i "s/$old_port/$last_port/" /root/hy/url.txt
+    sed -i "s/\"server\": \"\(.*\):[^\"]*\"/\"server\": \"\1:$last_port\"/" /root/hy/hy-client.json
+    sed -i "s/port: $old_port/port: $port/" /root/hy/clash-meta.yaml
+    sed -i "/^    ports: /d" /root/hy/clash-meta.yaml
+    sed -i "s/&mport=[0-9-]*//" /root/hy/url.txt
+    sed -i "s/:$old_port?/:$port?/" /root/hy/url.txt
+    if [[ -n $firstport ]]; then
+        sed -i "s/^    port: $port\$/    port: $port\n    ports: $firstport-$endport/" /root/hy/clash-meta.yaml
+        sed -i "s/:$port?protocol=\([^&]*\)&auth=\([^&]*\)&peer=\([^&]*\)/:$port?protocol=\1\&auth=\2\&peer=\3\&mport=$firstport-$endport/" /root/hy/url.txt
+    fi
 
     stophy && starthy
     green "แก้ไข config สำเร็จ กรุณานำเข้าไฟล์ config โหนดใหม่อีกครั้ง"
@@ -544,10 +569,10 @@ change_port(){
 change_pwd(){
     old_pwd=$(cat /etc/hysteria/config.json | grep password | sed -n 2p | awk -F " " '{print $2}' | sed "s/\"//g" | sed "s/,//g")
     inst_pwd
-    sed -i "s/$old_pwd/$auth_pwd" /etc/hysteria/config.json
-    sed -i "s/$old_pwd/$auth_pwd" /root/hy/hy-client.json
-    sed -i "s/$old_pwd/$auth_pwd" /root/hy/clash-meta.yaml
-    sed -i "s/$old_pwd/$auth_pwd" /root/hy/url.txt
+    sed -i "s/$old_pwd/$auth_pwd/" /etc/hysteria/config.json
+    sed -i "s/$old_pwd/$auth_pwd/" /root/hy/hy-client.json
+    sed -i "s/$old_pwd/$auth_pwd/" /root/hy/clash-meta.yaml
+    sed -i "s/$old_pwd/$auth_pwd/" /root/hy/url.txt
     stophy && starthy
     green "แก้ไข config สำเร็จ กรุณานำเข้าไฟล์ config โหนดใหม่อีกครั้ง"
 }
@@ -555,7 +580,7 @@ change_pwd(){
 change_resolv(){
     old_resolv=$(cat /etc/hysteria/config.json | grep resolv | awk -F " " '{print $2}' | sed "s/\"//g" | sed "s/,//g")
     inst_resolv
-    sed -i "s/$old_resolv/$resolv" /etc/hysteria/config.json
+    sed -i "s/$old_resolv/$resolv/" /etc/hysteria/config.json
     stophy && starthy
     green "แก้ไข config สำเร็จ กรุณานำเข้าไฟล์ config โหนดใหม่อีกครั้ง"
 }
