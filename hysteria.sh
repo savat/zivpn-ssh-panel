@@ -43,6 +43,72 @@ realip(){
     ip=$(curl -s4m8 ip.gs -k) || ip=$(curl -s6m8 ip.gs -k)
 }
 
+# ---------------------------------------------------------------------------
+# ส่วนที่เพิ่ม: อยู่ร่วมกับ ZIVPN ได้โดยไม่กระทบกัน
+#  - Hysteria ใช้ iptables chain ของตัวเอง (HYSTERIA_DNAT) ไม่ล้าง PREROUTING ทั้งก้อนอีกต่อไป
+#  - ไม่ให้เลือกพอร์ต/ช่วงพอร์ตที่ชนกับ ZIVPN (พอร์ตหลัก + ช่วง port hopping)
+#  - ใช้ install_server.sh ที่อยู่โฟลเดอร์เดียวกับสคริปต์นี้ (ไม่ดาวน์โหลดจากที่อื่น)
+# ---------------------------------------------------------------------------
+HY_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)
+HY_CHAIN="HYSTERIA_DNAT"
+ZIVPN_CONF="${ZP_ETC:-/etc/zivpn}/manager.conf"
+zv_port=""
+zv_range=""
+
+load_zivpn(){
+    zv_port=""; zv_range=""
+    [[ -r $ZIVPN_CONF ]] || return 0
+    zv_port=$(sed -n "s/^PORT='\([0-9]*\)'$/\1/p" "$ZIVPN_CONF" | head -n1)
+    zv_range=$(sed -n "s/^RANGE='\([0-9]*:[0-9]*\)'$/\1/p" "$ZIVPN_CONF" | head -n1)
+}
+
+# พอร์ตเดี่ยวชนกับ ZIVPN หรือไม่ (0 = ชน)
+zv_conflict_port(){
+    local p=$1 a b
+    [[ -n $zv_port && $p == "$zv_port" ]] && return 0
+    if [[ -n $zv_range ]]; then
+        a=${zv_range%:*}; b=${zv_range#*:}
+        (( p >= a && p <= b )) && return 0
+    fi
+    return 1
+}
+
+# ช่วงพอร์ตซ้อนกับ ZIVPN หรือไม่ (0 = ซ้อน)
+zv_conflict_range(){
+    local f=$1 e=$2 a b
+    [[ -n $zv_port ]] && (( zv_port >= f && zv_port <= e )) && return 0
+    if [[ -n $zv_range ]]; then
+        a=${zv_range%:*}; b=${zv_range#*:}
+        (( f <= b && e >= a )) && return 0
+    fi
+    return 1
+}
+
+# ลบเฉพาะกฎของ Hysteria (ไม่แตะกฎของ ZIVPN หรือโปรแกรมอื่น)
+hy_nat_clear(){
+    local t
+    for t in iptables ip6tables; do
+        command -v "$t" >/dev/null 2>&1 || continue
+        while "$t" -w -t nat -D PREROUTING -p udp -j "$HY_CHAIN" 2>/dev/null; do :; done
+        "$t" -w -t nat -F "$HY_CHAIN" 2>/dev/null
+        "$t" -w -t nat -X "$HY_CHAIN" 2>/dev/null
+    done
+    return 0
+}
+
+# hy_nat_add FIRST END PORT
+hy_nat_add(){
+    local t
+    for t in iptables ip6tables; do
+        command -v "$t" >/dev/null 2>&1 || continue
+        "$t" -w -t nat -N "$HY_CHAIN" 2>/dev/null
+        "$t" -w -t nat -F "$HY_CHAIN" 2>/dev/null
+        "$t" -w -t nat -A "$HY_CHAIN" -p udp --dport "$1:$2" -j DNAT --to-destination ":$3" 2>/dev/null || { [[ $t == iptables ]] && return 1; }
+        "$t" -w -t nat -C PREROUTING -p udp -j "$HY_CHAIN" 2>/dev/null || "$t" -w -t nat -A PREROUTING -p udp -j "$HY_CHAIN" 2>/dev/null
+    done
+    return 0
+}
+
 inst_cert(){
     green "วิธีขอใบรับรอง (certificate) ของ Hysteria:"
     echo ""
@@ -171,17 +237,30 @@ inst_pro(){
 }
 
 inst_port(){
-    iptables -t nat -F PREROUTING >/dev/null 2>&1
+    # ล้างเฉพาะกฎ port hopping ของ Hysteria เอง (เดิมใช้ iptables -t nat -F PREROUTING ซึ่งจะลบกฎของ ZIVPN ด้วย)
+    hy_nat_clear
+    load_zivpn
+    [[ -n $zv_port ]] && yellow "ตรวจพบ ZIVPN: พอร์ต $zv_port${zv_range:+ และช่วง hopping $zv_range} - จะไม่ใช้ซ้ำกับ Hysteria"
 
-    read -p "ตั้งพอร์ต Hysteria [1-65535]（กด Enter เพื่อสุ่มพอร์ต）: " port
-    [[ -z $port ]] && port=$(shuf -i 2000-65535 -n 1)
-    until [[ -z $(ss -tunlp | grep -w udp | awk '{print $5}' | sed 's/.*://g' | grep -w "$port") ]]; do
-        if [[ -n $(ss -tunlp | grep -w udp | awk '{print $5}' | sed 's/.*://g' | grep -w "$port") ]]; then
-            echo -e "${RED} $port ${PLAIN} พอร์ตนี้ถูกโปรแกรมอื่นใช้งานอยู่แล้ว กรุณาเปลี่ยนพอร์ตแล้วลองใหม่!"
-            read -p "ตั้งพอร์ต Hysteria [1-65535]（กด Enter เพื่อสุ่มพอร์ต）: " port
-            [[ -z $port ]] && port=$(shuf -i 2000-65535 -n 1)
+    local p
+    while :; do
+        read -p "ตั้งพอร์ต Hysteria [1-65535]（กด Enter เพื่อสุ่มพอร์ต）: " p || exit 1
+        [[ -z $p ]] && p=$(shuf -i 2000-65535 -n 1)
+        if [[ ! $p =~ ^[0-9]+$ ]] || (( p < 1 || p > 65535 )); then
+            red "พอร์ตไม่ถูกต้อง กรุณากรอกตัวเลข 1-65535"
+            continue
         fi
+        if zv_conflict_port "$p"; then
+            echo -e "${RED} $p ${PLAIN} ชนกับพอร์ตหรือช่วงพอร์ตของ ZIVPN กรุณาเลือกพอร์ตอื่น!"
+            continue
+        fi
+        if [[ -n $(ss -tunlp | grep -w udp | awk '{print $5}' | sed 's/.*://g' | grep -w "$p") ]]; then
+            echo -e "${RED} $p ${PLAIN} พอร์ตนี้ถูกโปรแกรมอื่นใช้งานอยู่แล้ว กรุณาเปลี่ยนพอร์ตแล้วลองใหม่!"
+            continue
+        fi
+        break
     done
+    port=$p
 
     yellow "พอร์ตที่จะใช้บนโหนด Hysteria คือ: $port"
 
@@ -191,6 +270,7 @@ inst_port(){
 }
 
 inst_jump(){
+    firstport=""; endport=""
     yellow "โปรโตคอลที่เลือกคือ udp รองรับฟังก์ชันข้ามพอร์ต (port hopping)"
     green "รูปแบบการใช้พอร์ตของ Hysteria:"
     echo ""
@@ -199,19 +279,20 @@ inst_jump(){
     echo ""
     read -rp "กรุณาเลือกตัวเลือก [1-2]: " jumpInput
     if [[ $jumpInput == 2 ]]; then
-        read -p "ตั้งพอร์ตเริ่มต้นของช่วง (แนะนำระหว่าง 10000-65535): " firstport
-        read -p "ตั้งพอร์ตปลายของช่วง (แนะนำ 10000-65535 ต้องมากกว่าพอร์ตเริ่มต้น): " endport
-        if [[ $firstport -ge $endport ]]; then
-            until [[ $firstport -le $endport ]]; do
-                if [[ $firstport -ge $endport ]]; then
-                    red "ต้องกรอกพอร์ตเริ่มต้นให้น้อยกว่าพอร์ตปลาย กรุณากรอกพอร์ตเริ่มต้นและปลายใหม่"
-                    read -p "ตั้งพอร์ตเริ่มต้นของช่วง (แนะนำระหว่าง 10000-65535): " firstport
-                    read -p "ตั้งพอร์ตปลายของช่วง (แนะนำ 10000-65535 ต้องมากกว่าพอร์ตเริ่มต้น): " endport
-                fi
-            done
-        fi
-        iptables -t nat -A PREROUTING -p udp --dport $firstport:$endport  -j DNAT --to-destination :$port
-        ip6tables -t nat -A PREROUTING -p udp --dport $firstport:$endport  -j DNAT --to-destination :$port
+        while :; do
+            read -p "ตั้งพอร์ตเริ่มต้นของช่วง (แนะนำระหว่าง 10000-65535): " firstport || exit 1
+            read -p "ตั้งพอร์ตปลายของช่วง (แนะนำ 10000-65535 ต้องมากกว่าพอร์ตเริ่มต้น): " endport || exit 1
+            if [[ ! $firstport =~ ^[0-9]+$ || ! $endport =~ ^[0-9]+$ ]] || (( firstport < 1 || endport > 65535 || firstport >= endport )); then
+                red "ต้องกรอกพอร์ตเริ่มต้นให้น้อยกว่าพอร์ตปลาย (ตัวเลข 1-65535) กรุณากรอกใหม่"
+                continue
+            fi
+            if zv_conflict_range "$firstport" "$endport"; then
+                red "ช่วง $firstport-$endport ซ้อนกับพอร์ต/ช่วงของ ZIVPN (${zv_port}${zv_range:+, $zv_range}) กรุณากรอกใหม่"
+                continue
+            fi
+            break
+        done
+        hy_nat_add "$firstport" "$endport" "$port" || red "เพิ่มกฎ iptables ไม่สำเร็จ"
         netfilter-persistent save >/dev/null 2>&1
     else
         red "จะใช้โหมดพอร์ตเดียวต่อไป"
@@ -246,9 +327,12 @@ inst_hy(){
     fi
     ${PACKAGE_INSTALL[int]} curl wget sudo qrencode procps iptables-persistent netfilter-persistent
 
-    wget -N https://raw.githubusercontent.com/Misaka-blog/hysteria-install/main/hy1/install_server.sh
-    bash install_server.sh
-    rm -f install_server.sh
+    # ใช้ install_server.sh ที่ติดมากับแพ็กเกจนี้ (โฟลเดอร์เดียวกับ hysteria.sh)
+    if [[ ! -f "$HY_DIR/install_server.sh" ]]; then
+        red "ไม่พบ $HY_DIR/install_server.sh - กรุณารัน install.sh ใหม่ หรือเปิดผ่านเมนู m"
+        return 1
+    fi
+    bash "$HY_DIR/install_server.sh"
 
     if [[ -f "/usr/local/bin/hysteria" ]]; then
         green "ติดตั้ง Hysteria สำเร็จ!"
@@ -403,8 +487,9 @@ uninst_hy(){
     systemctl stop hysteria-server.service >/dev/null 2>&1
     systemctl disable hysteria-server.service >/dev/null 2>&1
     rm -f /lib/systemd/system/hysteria-server.service /lib/systemd/system/hysteria-server@.service
-    rm -rf /usr/local/bin/hysteria /etc/hysteria /root/hy /root/hysteria.sh
-    iptables -t nat -F PREROUTING >/dev/null 2>&1
+    rm -rf /usr/local/bin/hysteria /etc/hysteria /root/hy
+    systemctl daemon-reload >/dev/null 2>&1
+    hy_nat_clear
     netfilter-persistent save >/dev/null 2>&1
     green "ถอนการติดตั้ง Hysteria เรียบร้อยแล้ว!"
 }
@@ -477,8 +562,6 @@ change_pro(){
 change_port(){
     old_port=$(cat /etc/hysteria/config.json | grep listen | awk -F " " '{print $2}' | sed "s/\"//g" | sed "s/,//g" | sed "s/://g")
     inst_port
-
-    iptables -t nat -F PREROUTING >/dev/null 2>&1
     netfilter-persistent save >/dev/null 2>&1
 
     if [[ -n $firstport ]]; then
@@ -487,10 +570,10 @@ change_port(){
         last_port=$port
     fi
 
-    sed -i "s/$old_port/$port" /etc/hysteria/config.json
-    sed -i "s/$old_port/$last_port" /root/hy/hy-client.json
-    sed -i "s/$old_port/$last_port" /root/hy/clash-meta.yaml
-    sed -i "s/$old_port/$last_port" /root/hy/url.txt
+    sed -i "s/$old_port/$port/" /etc/hysteria/config.json
+    sed -i "s/$old_port/$last_port/" /root/hy/hy-client.json
+    sed -i "s/$old_port/$last_port/" /root/hy/clash-meta.yaml
+    sed -i "s/$old_port/$last_port/" /root/hy/url.txt
 
     stophy && starthy
     green "แก้ไข config สำเร็จ กรุณานำเข้าไฟล์ config โหนดใหม่อีกครั้ง"

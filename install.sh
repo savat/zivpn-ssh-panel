@@ -7,13 +7,16 @@
 #   ZP_HOST   address shown to clients        (default: detected public IP)
 #   ZP_RANGE  UDP port-hopping range -> 5667  (default: 6000:19999, "off" = disable)
 #   ZP_YES=1  never ask questions
-#   ZP_MENU   path to menu.sh      (default: menu.sh next to install.sh)
-#   ZP_MENU_URL  download menu.sh from here if no local file
+#   ZP_RAW    where menu.sh / hysteria.sh / install_server.sh are downloaded from
+#             (default: https://github.com/savat/zivpn-ssh-panel/raw/main)
+#   ZP_MENU   use this local menu.sh instead of downloading it
+#   ZP_SHARE  where hysteria.sh + install_server.sh are kept (default: /usr/local/share/zivpn-panel)
 #
-# Files: install.sh + menu.sh must sit in the same folder.
+# install.sh downloads menu.sh (-> /usr/local/bin/m), hysteria.sh and install_server.sh (-> ZP_SHARE).
+# If the download fails, a copy sitting next to install.sh is used instead.
 #
 # Installs only what is needed: curl, openssl, iptables (+ iproute2 / ca-certificates if missing).
-VERSION="1.0.0"
+VERSION="1.1.0"
 set -u
 umask 022
 LC_COLLATE=C; export LC_COLLATE
@@ -26,6 +29,8 @@ ETC="${ZP_ETC:-/etc/zivpn}"
 BIN="${ZP_BIN:-/usr/local/bin/zivpn}"
 UNITS="${ZP_UNITS:-/etc/systemd/system}"
 SELF="${ZP_SELF:-/usr/local/bin/m}"
+RAW="${ZP_RAW:-https://github.com/savat/zivpn-ssh-panel/raw/main}"
+SHARE="${ZP_SHARE:-/usr/local/share/zivpn-panel}"
 LOG="${ZP_LOG:-/var/log/zivpn-install.log}"
 DRY="${ZP_DRY:-0}"
 YES="${ZP_YES:-0}"
@@ -149,27 +154,51 @@ gen_cert() {
     -keyout "$ETC/zivpn.key" -out "$ETC/zivpn.crt" && chmod 600 "$ETC/zivpn.key"
 }
 
-write_manager() { # ติดตั้ง menu.sh -> $SELF (คำสั่ง m)
-  _src="${ZP_MENU:-}"
-  if [ -z "$_src" ]; then
-    _d=$(cd "$(dirname "$0")" 2>/dev/null && pwd)
-    [ -n "$_d" ] && [ -f "$_d/menu.sh" ] && _src="$_d/menu.sh"
+# get_script NAME DEST : โหลด $RAW/NAME -> DEST (ถ้าโหลดไม่ได้ ใช้ไฟล์ชื่อเดียวกันที่อยู่ข้าง install.sh)
+get_script() {
+  _n=$1; _d=$2; _t="$_d.part"
+  mkdir -p "${_d%/*}" || return 1
+  rm -f "$_t"
+  if ! curl -fsSL --retry 3 --connect-timeout 15 -o "$_t" "$RAW/$_n"; then
+    rm -f "$_t"
+    _l=$(cd "$(dirname "$0")" 2>/dev/null && pwd)
+    if [ -n "$_l" ] && [ -f "$_l/$_n" ]; then
+      echo "โหลด $RAW/$_n ไม่ได้ - ใช้ไฟล์ในเครื่อง: $_l/$_n"
+      cp "$_l/$_n" "$_t" || return 1
+    else
+      echo "โหลด $RAW/$_n ไม่สำเร็จ (และไม่พบไฟล์ $_n ข้าง install.sh)"
+      return 1
+    fi
   fi
-  mkdir -p "${SELF%/*}"
-  if [ -n "$_src" ]; then
-    [ -r "$_src" ] || { echo "อ่านไฟล์ไม่ได้: $_src"; return 1; }
-    cp "$_src" "$SELF.new" || return 1
-  elif [ -n "${ZP_MENU_URL:-}" ]; then
-    curl -fsSL --retry 3 --connect-timeout 15 -o "$SELF.new" "$ZP_MENU_URL" || return 1
-  else
-    echo "ไม่พบ menu.sh - วางไว้โฟลเดอร์เดียวกับ install.sh หรือตั้ง ZP_MENU=/path/menu.sh หรือ ZP_MENU_URL=https://..."
-    return 1
-  fi
-  case $(head -n 1 "$SELF.new") in
+  case $(head -n 1 "$_t") in
     '#!'*) ;;
-    *) rm -f "$SELF.new"; echo "menu.sh ไม่ถูกต้อง (บรรทัดแรกต้องเป็น #!/bin/sh)"; return 1 ;;
+    *) rm -f "$_t"; echo "$_n ไม่ถูกต้อง (บรรทัดแรกต้องขึ้นต้นด้วย #!)"; return 1 ;;
   esac
-  chmod 755 "$SELF.new" && mv -f "$SELF.new" "$SELF"
+  chmod 755 "$_t" && mv -f "$_t" "$_d"
+}
+
+write_manager() { # ติดตั้ง menu.sh -> $SELF (คำสั่ง m)
+  mkdir -p "${SELF%/*}"
+  if [ -n "${ZP_MENU:-}" ]; then
+    [ -r "$ZP_MENU" ] || { echo "อ่านไฟล์ไม่ได้: $ZP_MENU"; return 1; }
+    cp "$ZP_MENU" "$SELF.new" || return 1
+    case $(head -n 1 "$SELF.new") in
+      '#!'*) ;;
+      *) rm -f "$SELF.new"; echo "menu.sh ไม่ถูกต้อง (บรรทัดแรกต้องเป็น #!/bin/sh)"; return 1 ;;
+    esac
+    chmod 755 "$SELF.new" && mv -f "$SELF.new" "$SELF"
+  else
+    get_script menu.sh "$SELF"
+  fi
+}
+
+# ไฟล์ตัวเสริม Hysteria - โหลดไม่ได้ก็ไม่ทำให้การติดตั้ง ZIVPN ล้มเหลว
+write_extras() {
+  _rc=0
+  for _f in hysteria.sh install_server.sh; do
+    get_script "$_f" "$SHARE/$_f" || _rc=1
+  done
+  return "$_rc"
 }
 
 write_units() {
@@ -317,7 +346,12 @@ fi
   printf "OBFS='%s'\n" "$OBFS"
 } >"$ETC/manager.conf"
 chmod 600 "$ETC/manager.conf"
-write_manager && ok "ติดตั้งตัวจัดการ: ${BLD}m${RST}" || die "เขียน $SELF ไม่สำเร็จ"
+if write_manager >>"$LOG" 2>&1; then ok "ติดตั้งตัวจัดการ: ${BLD}m${RST}"; else tail -n 3 "$LOG" 2>/dev/null | sed 's/^/      /' >&2; die "ติดตั้ง menu.sh ไม่สำเร็จ ($SELF)"; fi
+if write_extras >>"$LOG" 2>&1; then
+  ok "โหลดตัวติดตั้ง Hysteria แล้ว ${DIM}(hysteria.sh · install_server.sh)${RST}"
+else
+  warn "โหลดไฟล์ Hysteria ไม่สำเร็จ - ZIVPN ติดตั้งต่อได้ตามปกติ (เมนู m จะโหลดให้ใหม่ตอนเลือก Hysteria)"
+fi
 ZP_ETC="$ETC" ZP_DRY="$DRY" "$SELF" render >>"$LOG" 2>&1 || die "สร้าง config.json ไม่สำเร็จ"
 ok "สร้าง config.json"
 
@@ -347,6 +381,7 @@ kv "Port"    "$PORT/udp${RANGE:+  (hopping ${RANGE%:*}-${RANGE#*:})}"
 kv "Obfs"    "$OBFS"
 kv "Menu"    "${BLD}m${RST}       ${DIM}เปิดเมนูจัดการผู้ใช้${RST}"
 kv "Backup"  "m backup"
+kv "Hysteria" "m → เมนู 14 ${DIM}(ติดตั้งเพิ่มได้ ไม่กระทบ ZIVPN)${RST}"
 printf '  %s└────────────────────────────────────────%s\n\n' "$CYN" "$RST"
 
 if [ "$YES" != 1 ] && [ -t 0 ] && [ "$DRY" != 1 ]; then
