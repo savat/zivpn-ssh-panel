@@ -601,11 +601,13 @@ EOF
     fi
 
     green "ติดตั้งบริการพร็อกซี Hysteria เสร็จสิ้น"
-    yellow "เนื้อหาไฟล์ config ฝั่งไคลเอนต์ (hy-client.json) มีดังนี้ และบันทึกไว้ที่ /root/hy/hy-client.json"
-    cat /root/hy/hy-client.json
     yellow "ไฟล์ config ไคลเอนต์ Clash Meta บันทึกไว้ที่ /root/hy/clash-meta.yaml"
-    yellow "ลิงก์แชร์โหนด Hysteria มีดังนี้ และบันทึกไว้ที่ /root/hy/url.txt"
-    red $(cat /root/hy/url.txt)
+    yellow "ลิงก์แชร์โหนด Hysteria บันทึกไว้ที่ /root/hy/url.txt"
+    echo ""
+    # แสดง JSON เป็นอย่างสุดท้าย จะได้เห็นเต็ม ๆ บนหน้าจอ (ดูซ้ำได้ด้วย: cat /root/hy/hy-client.json)
+    green "===== hy-client.json (คัดลอกส่วนนี้ไปใช้ในแอป) ====="
+    cat /root/hy/hy-client.json
+    green "===== บันทึกไว้ที่ /root/hy/hy-client.json ====="
 }
 
 uninst_hy(){
