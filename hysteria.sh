@@ -299,10 +299,109 @@ inst_jump(){
     fi
 }
 
+# ---------------------------------------------------------------------------
+# โหมดอัตโนมัติ: ตอนติดตั้งถามแค่ auth_str กับ obfs ส่วนที่เหลือตั้งให้เอง
+#   ใบรับรอง = เซ็นเอง · โปรโตคอล = udp · พอร์ต = สุ่ม · port hopping = 20000-50000
+# ปรับเองได้ด้วยตัวแปร (ไม่ต้องกดถาม): HY_AUTH HY_OBFS HY_PORT HY_RANGE (a:b หรือ off) HY_YES=1
+# ---------------------------------------------------------------------------
+auto_cert(){
+    mkdir -p /etc/hysteria
+    cert_path="/etc/hysteria/cert.crt"
+    key_path="/etc/hysteria/private.key"
+    openssl ecparam -genkey -name prime256v1 -out "$key_path" >/dev/null 2>&1
+    openssl req -new -x509 -days 36500 -key "$key_path" -out "$cert_path" -subj "/CN=www.bing.com" >/dev/null 2>&1
+    chmod 644 "$cert_path"
+    chmod 600 "$key_path"
+    hy_ym="www.bing.com"
+    domain="www.bing.com"
+    if [[ -s $cert_path && -s $key_path ]]; then
+        green "สร้างใบรับรอง (เซ็นเอง) อัตโนมัติแล้ว"
+    else
+        red "สร้างใบรับรองไม่สำเร็จ (ต้องมี openssl)"; return 1
+    fi
+}
+
+# ตั้งช่วง hopping อัตโนมัติ -> firstport/endport (ว่าง = ไม่ใช้ hopping)
+auto_jump(){
+    firstport=""; endport=""
+    local r=${HY_RANGE:-auto} f e b
+    if [[ $r == off ]]; then
+        yellow "ปิด port hopping (HY_RANGE=off)"; return 0
+    fi
+    if [[ $r != auto ]]; then
+        IFS=':-' read -r f e <<< "$r"
+        if [[ $f =~ ^[0-9]+$ && $e =~ ^[0-9]+$ ]] && (( f >= 1 && e <= 65535 && f < e )) && ! zv_conflict_range "$f" "$e"; then
+            firstport=$f; endport=$e; return 0
+        fi
+        red "HY_RANGE=$r ใช้ไม่ได้ (ไม่ถูกต้อง หรือซ้อนกับ ZIVPN) - ใช้ค่าอัตโนมัติแทน"
+    fi
+    f=20000; e=50000
+    if zv_conflict_range "$f" "$e"; then
+        # ช่วงมาตรฐานซ้อนกับ ZIVPN -> เลื่อนไปต่อท้ายช่วงของ ZIVPN
+        b=${zv_range#*:}
+        f=$(( b + 1 > 20000 ? b + 1 : 20000 ))
+        e=$(( f + 30000 )); (( e > 65000 )) && e=65000
+        if (( e - f < 1000 )) || zv_conflict_range "$f" "$e"; then
+            yellow "หาช่วง hopping ที่ไม่ซ้อนกับ ZIVPN ไม่ได้ - ใช้พอร์ตเดียว"
+            return 0
+        fi
+    fi
+    firstport=$f; endport=$e
+}
+
+# สุ่มพอร์ตหลัก -> port (ไม่ชน ZIVPN / ช่วง hopping / พอร์ตที่ถูกใช้อยู่)
+auto_port(){
+    local p i
+    if [[ -n ${HY_PORT:-} ]]; then
+        p=$HY_PORT
+        if [[ ! $p =~ ^[0-9]+$ ]] || (( p < 1 || p > 65535 )) || zv_conflict_port "$p" \
+           || [[ -n $(ss -tunlp | grep -w udp | awk '{print $5}' | sed 's/.*://g' | grep -w "$p") ]]; then
+            red "HY_PORT=$p ใช้ไม่ได้ (ไม่ถูกต้อง ชนกับ ZIVPN หรือถูกใช้อยู่)"; return 1
+        fi
+        port=$p; return 0
+    fi
+    for ((i = 0; i < 200; i++)); do
+        p=$(shuf -i 10000-65535 -n 1)
+        zv_conflict_port "$p" && continue
+        [[ -n $firstport ]] && (( p >= firstport && p <= endport )) && continue
+        [[ -n $(ss -tunlp | grep -w udp | awk '{print $5}' | sed 's/.*://g' | grep -w "$p") ]] && continue
+        port=$p; return 0
+    done
+    red "สุ่มพอร์ตที่ว่างไม่สำเร็จ"; return 1
+}
+
 inst_pwd(){
-    read -p "ตั้งรหัสผ่าน Hysteria（กด Enter เพื่อสุ่ม）: " auth_pwd
-    [[ -z $auth_pwd ]] && auth_pwd=$(date +%s%N | md5sum | cut -c 1-8)
+    if [[ -n ${HY_AUTH:-} ]]; then
+        if [[ $HY_AUTH =~ ^[A-Za-z0-9_.:@+=-]+$ ]]; then
+            auth_pwd=$HY_AUTH; yellow "รหัสผ่านที่ใช้บนโหนด Hysteria คือ: $auth_pwd"; return 0
+        fi
+        red "HY_AUTH มีอักขระที่ใช้ไม่ได้ - ถามใหม่"
+    fi
+    while :; do
+        read -p "ตั้งรหัสผ่าน Hysteria (auth_str) เช่น user:pass（กด Enter เพื่อสุ่ม）: " auth_pwd || exit 1
+        [[ -z $auth_pwd ]] && auth_pwd=$(date +%s%N | md5sum | cut -c 1-8)
+        if [[ $auth_pwd =~ ^[A-Za-z0-9_.:@+=-]+$ ]]; then
+            break
+        fi
+        red "ใช้ได้เฉพาะ a-z A-Z 0-9 และ _ . : @ + = - (ห้ามเว้นวรรคหรืออักขระพิเศษอื่น)"
+    done
     yellow "รหัสผ่านที่ใช้บนโหนด Hysteria คือ: $auth_pwd"
+}
+
+inst_obfs(){
+    if [[ -n ${HY_OBFS+x} && $HY_OBFS =~ ^[A-Za-z0-9_.@+=-]*$ ]]; then
+        obfs=$HY_OBFS
+        if [[ -n $obfs ]]; then yellow "obfs ที่ใช้คือ: $obfs"; else yellow "ไม่ใช้ obfs"; fi
+        return 0
+    fi
+    while :; do
+        read -p "ตั้งค่า obfs เช่น jaideevpn（กด Enter = ไม่ใช้ obfs）: " obfs || exit 1
+        if [[ -z $obfs || $obfs =~ ^[A-Za-z0-9_.@+=-]+$ ]]; then
+            break
+        fi
+        red "ใช้ได้เฉพาะ a-z A-Z 0-9 และ _ . @ + = - (ห้ามเว้นวรรคหรืออักขระพิเศษอื่น)"
+    done
+    if [[ -n $obfs ]]; then yellow "obfs ที่ใช้คือ: $obfs"; else yellow "ไม่ใช้ obfs"; fi
 }
 
 inst_resolv(){
@@ -322,6 +421,19 @@ inst_resolv(){
 }
 
 inst_hy(){
+    if [[ -f /etc/hysteria/config.json && ${HY_YES:-0} != 1 ]]; then
+        yellow "พบ Hysteria ติดตั้งอยู่แล้ว - การติดตั้งซ้ำจะสร้าง config และไฟล์ไคลเอนต์ใหม่ทั้งหมด"
+        read -rp "ติดตั้งซ้ำหรือไม่? (y/N): " yn
+        [[ $yn =~ ^[yY] ]] || return 0
+    fi
+
+    # ไม่ให้ apt ถามระหว่างติดตั้ง (iptables-persistent ชอบเด้งหน้าต่างถามเรื่องบันทึกกฎ)
+    export DEBIAN_FRONTEND=noninteractive
+    if command -v debconf-set-selections >/dev/null 2>&1; then
+        echo "iptables-persistent iptables-persistent/autosave_v4 boolean true" | debconf-set-selections
+        echo "iptables-persistent iptables-persistent/autosave_v6 boolean true" | debconf-set-selections
+    fi
+
     if [[ ! $SYSTEM == "CentOS" ]]; then
         ${PACKAGE_UPDATE[int]}
     fi
@@ -340,18 +452,31 @@ inst_hy(){
         red "ติดตั้ง Hysteria ล้มเหลว!"
     fi
 
-    # ถามค่าต่าง ๆ สำหรับการตั้งค่า Hysteria
-    inst_cert
-    inst_pro
-    inst_port
+    # ตั้งค่าอัตโนมัติ (ถามแค่ auth_str กับ obfs)
+    auto_cert || return 1
+    protocol="udp"
+    resolv=46
+    hy_nat_clear
+    load_zivpn
+    [[ -n $zv_port ]] && yellow "ตรวจพบ ZIVPN: พอร์ต $zv_port${zv_range:+ และช่วง hopping $zv_range} - จะไม่ใช้ซ้ำ"
+    auto_jump
+    auto_port || return 1
+    if [[ -n $firstport ]]; then
+        hy_nat_add "$firstport" "$endport" "$port" || red "เพิ่มกฎ iptables ไม่สำเร็จ"
+        netfilter-persistent save >/dev/null 2>&1
+    fi
+    yellow "พอร์ต Hysteria: $port${firstport:+  ·  port hopping: $firstport-$endport}"
+    echo ""
     inst_pwd
-    inst_resolv
+    inst_obfs
 
     # สร้างไฟล์ config ของ Hysteria
+    obfs_line=""
+    [[ -n $obfs ]] && obfs_line=$'\n'"    \"obfs\": \"$obfs\","
     cat <<EOF > /etc/hysteria/config.json
 {
     "protocol": "$protocol",
-    "listen": ":$port",
+    "listen": ":$port",$obfs_line
     "resolve_preference": "$resolv",
     "cert": "$cert_path",
     "key": "$key_path",
@@ -367,10 +492,14 @@ EOF
 
     # หาขอบเขตพอร์ตสุดท้ายที่ลูกค้าใช้
     if [[ -n $firstport ]]; then
-        last_port="$port,$firstport-$endport"
+        last_port="$firstport-$endport"
     else
         last_port=$port
     fi
+
+    # ดึง IP สาธารณะถ้ายังไม่มี (เดิมตั้งค่าเฉพาะตอนเลือกขอใบรับรองด้วย Acme ทำให้ลิงก์/ไฟล์ config ไม่มีที่อยู่เซิร์ฟเวอร์)
+    [[ -z $ip ]] && realip
+    [[ -z $ip ]] && ip=$(curl -s4m8 https://api.ipify.org)
 
     # ครอบ IP ของ IPv6 ด้วยวงเล็บเหลี่ยม
     if [[ -n $(echo $ip | grep ":") ]]; then
@@ -396,31 +525,26 @@ EOF
 
     # สร้างไฟล์ config ของ V2rayN และ Clash Meta
     mkdir /root/hy >/dev/null 2>&1
+    # hy-client.json ใช้รูปแบบเดียวกับตัวอย่าง (auth_str / obfs / up_mbps / down_mbps / socks5 / http ...)
+    # alpn ต้องตรงกับฝั่งเซิร์ฟเวอร์ (ตั้งเป็น h3) ถ้าแอปของคุณไม่มีช่อง alpn ให้ลบบรรทัดนี้ได้ถ้าแอปตั้งค่าเอง
+    proto_line=""
+    [[ $protocol != "udp" ]] && proto_line=$'\n'"  \"protocol\": \"$protocol\","
     cat <<EOF > /root/hy/hy-client.json
 {
-  "server": "$hy_ym:$last_port",
-  "server_name": "$domain",
-  "protocol": "$protocol",
-  "alpn": "h3",
+  "server": "$hy_ym:$last_port",$proto_line
   "auth_str": "$auth_pwd",
-  "obfs": "",
-  "up_mbps": 20,
-  "down_mbps": 100,
+  "obfs": "$obfs",
+  "alpn": "h3",
+  "up_mbps": 10,
+  "down_mbps": 20,
   "retry": 3,
-  "retry_interval": 3,
-  "socks5": {
-    "listen": "127.0.0.1:5080"
-  },
-  "http": {
-    "listen": "127.0.0.1:8989"
-  },
+  "retry_interval": 1,
+  "socks5": { "listen": "127.0.0.1:1080" },
+  "http": { "listen": "127.0.0.1:8989" },
   "insecure": true,
   "ca": "",
   "recv_window_conn": 196608,
-  "recv_window": 491520,
-  "fast_open": true,
-  "lazy_start": true,
-  "hop_interval": 60
+  "recv_window": 491520
 }
 EOF
 
@@ -448,6 +572,7 @@ proxies:
     alpn:
       - h3
     protocol: $protocol
+$([[ -n $obfs ]] && echo "    obfs: $obfs")
     up: 20
     down: 100
     sni: $domain
@@ -462,7 +587,7 @@ rules:
   - GEOIP,CN,DIRECT
   - MATCH,Proxy
 EOF
-    url="hysteria://$hy_ym:$port?protocol=$protocol&auth=$auth_pwd&peer=$domain&insecure=true&upmbps=20&downmbps=100&alpn=h3#Misaka-Hysteria"
+    url="hysteria://$hy_ym:$port?protocol=$protocol&auth=$auth_pwd&peer=$domain&insecure=true&upmbps=20&downmbps=100&alpn=h3${obfs:+&obfsParam=$obfs&obfs=xplus}#Misaka-Hysteria"
     echo $url > /root/hy/url.txt
 
     systemctl daemon-reload
@@ -565,15 +690,18 @@ change_port(){
     netfilter-persistent save >/dev/null 2>&1
 
     if [[ -n $firstport ]]; then
-        last_port="$port,$firstport-$endport"
+        last_port="$firstport-$endport"
     else
         last_port=$port
     fi
 
+    # ที่อยู่เซิร์ฟเวอร์เดิมในไฟล์ client (ตัดส่วนพอร์ตท้ายสุดออก)
+    old_host=$(sed -n 's/^  "server": "\(.*\):[^:]*",\?$/\1/p' /root/hy/hy-client.json | head -n1)
+
     sed -i "s/$old_port/$port/" /etc/hysteria/config.json
-    sed -i "s/$old_port/$last_port/" /root/hy/hy-client.json
-    sed -i "s/$old_port/$last_port/" /root/hy/clash-meta.yaml
-    sed -i "s/$old_port/$last_port/" /root/hy/url.txt
+    [[ -n $old_host ]] && sed -i "s#^  \"server\": .*#  \"server\": \"$old_host:$last_port\",#" /root/hy/hy-client.json
+    sed -i "s/$old_port/$port/" /root/hy/clash-meta.yaml
+    sed -i "s/$old_port/$port/" /root/hy/url.txt
 
     stophy && starthy
     green "แก้ไข config สำเร็จ กรุณานำเข้าไฟล์ config โหนดใหม่อีกครั้ง"
@@ -582,10 +710,10 @@ change_port(){
 change_pwd(){
     old_pwd=$(cat /etc/hysteria/config.json | grep password | sed -n 2p | awk -F " " '{print $2}' | sed "s/\"//g" | sed "s/,//g")
     inst_pwd
-    sed -i "s/$old_pwd/$auth_pwd" /etc/hysteria/config.json
-    sed -i "s/$old_pwd/$auth_pwd" /root/hy/hy-client.json
-    sed -i "s/$old_pwd/$auth_pwd" /root/hy/clash-meta.yaml
-    sed -i "s/$old_pwd/$auth_pwd" /root/hy/url.txt
+    sed -i "s/$old_pwd/$auth_pwd/" /etc/hysteria/config.json
+    sed -i "s/$old_pwd/$auth_pwd/" /root/hy/hy-client.json
+    sed -i "s/$old_pwd/$auth_pwd/" /root/hy/clash-meta.yaml
+    sed -i "s/$old_pwd/$auth_pwd/" /root/hy/url.txt
     stophy && starthy
     green "แก้ไข config สำเร็จ กรุณานำเข้าไฟล์ config โหนดใหม่อีกครั้ง"
 }
@@ -598,6 +726,19 @@ change_resolv(){
     green "แก้ไข config สำเร็จ กรุณานำเข้าไฟล์ config โหนดใหม่อีกครั้ง"
 }
 
+change_obfs(){
+    inst_obfs
+    sed -i '/"obfs":/d' /etc/hysteria/config.json
+    [[ -n $obfs ]] && sed -i "/\"listen\":/a\\    \"obfs\": \"$obfs\"," /etc/hysteria/config.json
+    sed -i "s/^  \"obfs\":.*/  \"obfs\": \"$obfs\",/" /root/hy/hy-client.json
+    sed -i '/^    obfs: /d' /root/hy/clash-meta.yaml
+    [[ -n $obfs ]] && sed -i "/^    protocol:/a\\    obfs: $obfs" /root/hy/clash-meta.yaml
+    sed -i -E 's/&obfsParam=[^&#]*&obfs=xplus//' /root/hy/url.txt
+    [[ -n $obfs ]] && sed -i "s/#Misaka-Hysteria/\&obfsParam=$obfs\&obfs=xplus#Misaka-Hysteria/" /root/hy/url.txt
+    stophy && starthy
+    green "แก้ไข config สำเร็จ กรุณานำเข้าไฟล์ config โหนดใหม่อีกครั้ง"
+}
+
 editconf(){
     green "เลือกการแก้ไข config ของ Hysteria:"
     echo -e " ${GREEN}1.${PLAIN} เปลี่ยนประเภทใบรับรอง"
@@ -605,14 +746,16 @@ editconf(){
     echo -e " ${GREEN}3.${PLAIN} เปลี่ยนพอร์ต"
     echo -e " ${GREEN}4.${PLAIN} เปลี่ยนรหัสผ่านยืนยันตัวตน"
     echo -e " ${GREEN}5.${PLAIN} เปลี่ยนลำดับความสำคัญการแยกโดเมน"
+    echo -e " ${GREEN}6.${PLAIN} เปลี่ยน obfs"
     echo ""
-    read -p " กรุณาเลือกการทำงาน [1-5]: " confAnswer
+    read -p " กรุณาเลือกการทำงาน [1-6]: " confAnswer
     case $confAnswer in
         1 ) change_cert ;;
         2 ) change_pro ;;
         3 ) change_port ;;
         4 ) change_pwd ;;
         5 ) change_resolv ;;
+        6 ) change_obfs ;;
         * ) exit 1 ;;
     esac
 }
